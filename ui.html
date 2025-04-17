@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <style>
+    body {
+      font-family: 'Consolas', monospace;
+      margin: 0;
+      padding: 16px;
+    }
+
+    input {
+      font-family: monospace;
+    }
+
+    ::placeholder {
+      font-family: monospace;
+      color: #b7b7b7;
+    }
+
+    button {
+      font-family: monospace;
+    }
+
+    p {
+      font-size: .9rem;
+      line-height: 1.2rem;
+    }
+
+    h3 {
+      font-size: 1rem;
+    }
+    
+    label {
+      font-size: .9rem;
+      color: #5f5f5f;
+    }
+
+    p.instruction {
+      color: #767676; 
+    }
+
+    input, textarea, button {
+      width: 100%;
+      margin-top: 4px;
+      margin-bottom: 16px;
+      padding: 8px;
+      box-sizing: border-box;
+    }
+    
+    button {
+      background-color: #0600ac;
+      color: white;
+      border: none;
+      border-radius: 4px;
+      cursor: pointer;
+      height: 44px;
+    }
+    
+    button:hover {
+      background-color: #030052;
+    }
+    
+    button:disabled {
+      background-color: #CCCCCC;
+      cursor: not-allowed;
+    }
+    
+    .section {
+      margin-bottom: 20px;
+    }
+    
+    .status {
+      margin-bottom: 12px;
+    }
+    
+    .error {
+      color: rgb(198, 0, 0);
+    }
+    
+    .success {
+      color: rgb(0, 104, 0);
+    }
+    
+    #progressLog {
+      border: 1px solid #ccc;
+      padding: 8px;
+      margin: 12px 0;
+      max-height: 100px;
+      overflow-y: auto;
+      font-family: monospace;
+      font-size: 12px;
+    }
+    
+    .step {
+      margin-bottom: 8px;
+      padding-left: 8px;
+      border-left: 3px solid #0600ac;
+    }
+
+    #closeButton {
+      background: white;
+      border: 1px solid #0600ac;
+      color: #0600ac;
+    }
+
+    #closeButton:hover {
+      background: #0600ac1d;
+    }
+
+  </style>
+</head>
+<body>
+  <h2>🫸 Push Icons</h2>
+  
+  <div class="section">
+    <h3>1. Select frames containing icons</h3>
+    <p class="instruction">Select the frames containing the icons you want to export to Github.</p>
+    <button id="exportSelectedButton">Export selected elements as SVG</button>
+    <div id="progressLog" style="display: none;"></div>
+  </div>
+  
+  <div class="section">
+    <h3>2. GitHub repository details</h3>
+    <label for="repoOwner">Repository owner</label>
+    <input type="text" id="repoOwner" placeholder="e.g. username or organization">
+    
+    <label for="repoName">Repository name</label>
+    <input type="text" id="repoName" placeholder="e.g. my-icon-library">
+    
+    <label for="branch">Target branch</label>
+    <input type="text" id="branch" placeholder="main" value="main">
+    
+    <label for="path">Path in repository</label>
+    <input type="text" id="path" placeholder="icons/" value="icons/">
+    
+    <label for="token">GitHub personal access token</label>
+    <input type="password" id="token" placeholder="Enter your GitHub PAT">
+  </div>
+  
+  <div class="section">
+    <h3>3. Pull request details</h3>
+    <label for="prTitle">Title</label>
+    <input type="text" id="prTitle" placeholder="Add new icons">
+    
+    <label for="prBody">Description</label>
+    <textarea id="prBody" rows="3" style="width: 100%;" placeholder="Description of changes..."></textarea>
+  </div>
+  
+  <div id="status" class="status"></div>
+  
+  <button id="createPRButton" disabled>Create pull request</button>
+  <!-- <button id="closeButton">Close plugin</button> -->
+  
+  <script>
+    let exportedIcons = [];
+    
+    // When the UI is loaded
+    window.onload = () => {
+      document.getElementById('exportSelectedButton').onclick = exportSelected;
+      document.getElementById('createPRButton').onclick = createPullRequest;
+      document.getElementById('closeButton').onclick = () => parent.postMessage({ pluginMessage: { type: 'close' }}, '*');
+      
+      // Set default PR title based on date
+      const today = new Date();
+      const dateStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      document.getElementById('prTitle').value = `Add icons - ${dateStr}`;
+      document.getElementById('prBody').value = `New icons exported from Figma on ${dateStr}`;
+    };
+    
+    function exportSelected() {
+      // Show progress log
+      const progressLog = document.getElementById('progressLog');
+      progressLog.style.display = 'block';
+      progressLog.innerHTML = '<div>Starting export...</div>';
+      
+      // Disable the export button during export
+      document.getElementById('exportSelectedButton').disabled = true;
+      
+      // Request export of selected elements
+      parent.postMessage({ pluginMessage: { type: 'export-selected' }}, '*');
+    }
+    
+    function showStatus(message, type = 'info') {
+      const status = document.getElementById('status');
+      status.innerHTML = message;
+      status.className = 'status ' + type;
+    }
+    
+    async function createPullRequest() {
+      if (exportedIcons.length === 0) {
+        showStatus('No icons to upload. Please export some first.', 'error');
+        return;
+      }
+      
+      // Get GitHub details
+      const repoOwner = document.getElementById('repoOwner').value.trim();
+      const repoName = document.getElementById('repoName').value.trim();
+      const branch = document.getElementById('branch').value.trim() || 'main';
+      let path = document.getElementById('path').value.trim() || 'icons/';
+      const token = document.getElementById('token').value.trim();
+      const prTitle = document.getElementById('prTitle').value.trim();
+      const prBody = document.getElementById('prBody').value.trim();
+      
+      // Validate
+      if (!repoOwner || !repoName || !token) {
+        showStatus('Please fill in all required GitHub repository details.', 'error');
+        return;
+      }
+      
+      // Ensure path ends with a slash
+      if (!path.endsWith('/')) {
+        path += '/';
+      }
+      
+      try {
+        // Disable the button during upload
+        document.getElementById('createPRButton').disabled = true;
+        showStatus('Creating branch and uploading icons...', 'info');
+        
+        // 1. Get the SHA of the latest commit on the target branch
+        const refsResponse = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/git/refs/heads/${branch}`, {
+          headers: { 'Authorization': `token ${token}` }
+        });
+        
+        if (!refsResponse.ok) {
+          throw new Error(`Could not get branch reference: ${refsResponse.statusText}`);
+        }
+        
+        const refsData = await refsResponse.json();
+        const baseSha = refsData.object.sha;
+        
+        // 2. Create a new branch for our changes
+        const newBranchName = `icons-update-${new Date().getTime()}`;
+        const createBranchResponse = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/git/refs`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `token ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            ref: `refs/heads/${newBranchName}`,
+            sha: baseSha
+          })
+        });
+        
+        if (!createBranchResponse.ok) {
+          throw new Error(`Could not create new branch: ${createBranchResponse.statusText}`);
+        }
+        
+        // 3. Upload each SVG file
+        for (const icon of exportedIcons) {
+          const fileName = icon.name;
+          const fileContent = icon.svg;
+          
+          const contentResponse = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/contents/${path}${fileName}`, {
+            method: 'PUT',
+            headers: {
+              'Authorization': `token ${token}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              message: `Add ${fileName} icon`,
+              content: btoa(fileContent), // Base64 encode the SVG content
+              branch: newBranchName
+            })
+          });
+          
+          if (!contentResponse.ok) {
+            throw new Error(`Failed to upload ${fileName}: ${contentResponse.statusText}`);
+          }
+        }
+        
+        // 4. Create a pull request
+        const prResponse = await fetch(`https://api.github.com/repos/${repoOwner}/${repoName}/pulls`, {
+          method: 'POST',
+          headers: {
+            'Authorization': `token ${token}`,
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            title: prTitle,
+            body: prBody,
+            head: newBranchName,
+            base: branch
+          })
+        });
+        
+        if (!prResponse.ok) {
+          throw new Error(`Could not create pull request: ${prResponse.statusText}`);
+        }
+        
+        const prData = await prResponse.json();
+        showStatus(`Success! Pull request #${prData.number} created. <a href="${prData.html_url}" target="_blank">View PR</a>`, 'success');
+        
+      } catch (error) {
+        showStatus(`Error: ${error.message}`, 'error');
+        console.error('GitHub API error:', error);
+      } finally {
+        document.getElementById('createPRButton').disabled = false;
+      }
+    }
+    
+    // Listen for messages from the plugin code
+    window.onmessage = async (event) => {
+      const msg = event.data.pluginMessage;
+      
+      if (msg.type === 'export-progress') {
+        const progressLog = document.getElementById('progressLog');
+        const entry = document.createElement('div');
+        entry.textContent = msg.message;
+        if (msg.isError) {
+          entry.className = 'error';
+        }
+        progressLog.appendChild(entry);
+        progressLog.scrollTop = progressLog.scrollHeight;
+      }
+      
+      if (msg.type === 'export-result') {
+        // Re-enable the export button
+        document.getElementById('exportSelectedButton').disabled = false;
+        
+        if (!msg.success) {
+          showStatus(`Export failed: ${msg.error}`, 'error');
+          return;
+        }
+        
+        exportedIcons = msg.icons;
+        showStatus(`Successfully exported ${msg.count} icons.`, 'success');
+        
+        // Enable the PR button if we have icons
+        document.getElementById('createPRButton').disabled = (exportedIcons.length === 0);
+        
+        // Add summary to log
+        const progressLog = document.getElementById('progressLog');
+        const summary = document.createElement('div');
+        summary.className = 'success';
+        summary.textContent = `✓ Export complete! ${msg.count} icons ready for GitHub.`;
+        progressLog.appendChild(summary);
+        progressLog.scrollTop = progressLog.scrollHeight;
+      }
+    };
+  </script>
+</body>
+</html>
